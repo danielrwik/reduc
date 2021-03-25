@@ -60,7 +60,7 @@ To begin:
 
 The following commands are meant to be copy-and-pasted into the `IDL`
 command line, so some definitions (like dir='..') are
-epeated -- if a routine crashes or is CTL-C'ed,
+repeated -- if a routine crashes or is CTL-C'ed,
 `IDL` wipes variable names so it's convenient to not have to scroll
 up to reinitialize parameters.
 
@@ -90,10 +90,15 @@ Filter out periods (in 100s chunks) where the background is high,
 either due to SAA enhancement (using the hard band 50-160 keV) or
 solar activity (using the soft band 1.6-20 keV).
 
-If point source(s) in FOV, make exclude region called `excl.reg` and
-place it in the `event_cl` directory.  Emission from galaxy clusters
-does not vary, so this step can be skipped (be sure to remove `/excl`
+If there are point source(s) in the FOV,
+make exclude region called `excl.reg` and
+place it in the `event_cl` directory.
+Emission from galaxy clusters
+does not vary, so this step can be skipped (be sure to remove the `/excl`
 keyword below in that case).
+However, it can still be useful to remove the brightest regions even
+if the emission shouldn't vary with time, so that lower level variability
+won't be swamped by a high source rate.
 
     tbin=100.
 
@@ -132,6 +137,91 @@ excluding the bad GTIs found during `lcfilter`.
 #### Create BGD Files & Fit
 
 Need to make `dir+'/srcexcl.reg'` to exclude non-modeled features.
+Any bright source area should be included in the region(s) listed.
+If the source covers the entire FOV, or is likely to bleed over into
+the background regions given the size of the exclusion region, that
+source emission will need to be included as a model during the `XSpec`
+fitting, otherwise it will be confused for a background component and
+lead to the background being overestimated.
+
+***Manual Steps***
+
+First, create instrument maps and sky-projected background maps for
+later use (if you decide to extract new background regions, these steps
+do not need to be rerun -- only if the CALDB is updated in some important
+way will these products ever need to be remade).
+
+    dir='50310000_M33'
+    obsid='50310001002'
+    imname='im4to25keV.fits'
+    cldir=dir+'/'+obsid+'/event_cl/'
+    bdname='bgd'
+    base='bgdbox'
+    savfile='bgdnames.sav'
+
+    bgddir=cldir+bdname+'/'
+    if not file_test(bgddir,/directory) then spawn,'mkdir '+bgddir
+
+    ab=['A','B']
+    for iab=0,n_elements(ab)-1 do begin & $
+        nuskybgd_instrmap,dir,obsid,ab[iab],bdname  & $
+        fits_read,cldir+imname,blah,header  & $
+        projinitbgds,dir,obsid,header,ab[iab],bdname  & $
+    endfor
+
+Next, make background regions.
+Follow the `nuskybgd` guide for creating the region files.
+Also following the guide for the `nuskybgd_fitab` step, list your
+region filenames in the IDL variable `regnames`.
+If you are lazy or want to create an initial set of regions to adjust, run:
+
+    mkbgdregs,cldir,dir+'/srcexcl.reg',base,regnames=regnames,acceptfrac=0.1
+
+Still following the `nuskybgd` guide, you can extract background spectra using
+these regions with `nuproducts`.
+For later steps, you also want to define variables in `IDL` to let the code
+know what the names of the spectra are and whether the region/spectrum is from
+the A or B telescope.
+For example, the region names from the `mkbgdregs` routine will be called
+'bgdboxA1.reg', etc., and if the spectral files are similarly named
+'bgdboxA1.pha', the following code will make the needed variables `abarr`
+and `spec`.
+Alternatively, you can just set them manually, e.g.,
+`IDL> spec=['bgdboxA1.pha','bgdboxA2.pha',...]` and `IDL> spec=['A','A',...]`.
+
+    undefine,abarr,spec
+    for i=0,n_elements(regnames)-1 do begin & $
+        if strpos(regnames[i],'A') ne -1 then push,abarr,'A' else push,abarr,'B' & $
+        blah=strsplit(regnames[i],'.',/extract) & $
+        push,spec,blah[0]+'.pha' & $
+    endfor
+
+Instead of running `nuproducts`, there is an option to create spectra directly
+in `IDL`, which has the added benefit of applying detector absorption to the
+response files (which has to be done after the rmf files are created with
+`nuproducts`) and the spectra are grouped to at least 3 counts per bin, which
+would also need to be applied to `nuproducts` spectra if grouping was not
+specified in the call to that routine.
+
+    for iab=0,n_elements(ab)-1 do begin & $
+        ii=where(abarr eq ab[iab]) & $
+        getspecrmf,cldir+'nu'+obsid+ab[iab]+'01_cl.evt',ab[iab],cldir+regnames[ii],$
+              bgddir,bgddir,base,/cmprmf & $
+    endfor
+
+Lastly, save some of these variables in case a crash occurs in `IDL` and their
+values are lost.
+
+    ab='AB'
+    save,filename=cldir+savfile,regnames,spec,base,bgddir,cldir,ab
+
+
+***Automated Steps***
+
+Automated version of above steps; main difference is that regions are
+created automatically, which should be fine in cases where the target
+doesn't extend over the majority of the FOV, but could lead to less
+ideal results.
 
     bdname='bgd'
     base='bgdbox'
